@@ -1,4 +1,5 @@
-import mongoose from "mongoose"
+// user.model.js (Updated)
+import mongoose from "mongoose";
 
 const addressSchema = new mongoose.Schema({
   type: { type: String, enum: ["home", "office", "other"], default: "home" },
@@ -9,14 +10,14 @@ const addressSchema = new mongoose.Schema({
   latitude: { type: Number },
   longitude: { type: Number },
   isDefault: { type: Boolean, default: false },
-})
+});
 
 const walletTransactionSchema = new mongoose.Schema({
   amount: { type: Number, required: true },
   type: { type: String, enum: ["credit", "debit"], required: true },
   description: { type: String, required: true },
   date: { type: Date, default: Date.now },
-})
+});
 
 const userSchema = new mongoose.Schema(
   {
@@ -24,13 +25,10 @@ const userSchema = new mongoose.Schema(
     email: { type: String, lowercase: true },
     mobileNumber: { type: String, required: true },
     countryCode: { type: String, default: "+213" },
-    profileImage: { type: String },
     isVerified: { type: Boolean, default: false },
     isMobileVerified: { type: Boolean, default: false },
-    isAdmin: { type: Boolean, default: false },
-    isRestaurantOwner: { type: Boolean, default: false },
+    isAdmin: { type: Boolean, required: true, default: false },
     deviceToken: { type: String },
-    language: { type: String, default: "en" },
     social: {
       google: {
         id: { type: String },
@@ -48,7 +46,6 @@ const userSchema = new mongoose.Schema(
       balance: { type: Number, default: 0 },
       transactions: [walletTransactionSchema],
     },
-    favorites: [{ type: mongoose.Schema.Types.ObjectId, ref: "Restaurant" }],
     stripeCustomerId: { type: String },
 
     dietaryProfile: {
@@ -75,26 +72,24 @@ const userSchema = new mongoose.Schema(
       b: { type: Number, default: 0 },
       lastTrained: Date,
     },
-  favorites: [{ type: mongoose.Schema.Types.ObjectId, ref: "MenuItem" }],
-  recommandations: [{ type: mongoose.Schema.Types.ObjectId, ref: "MenuItem" }],
-
+    favorites: [{ type: mongoose.Schema.Types.ObjectId, ref: "MenuItem" }], // <-- KEPT (MenuItem favorites)
+    recommandations: [{ type: mongoose.Schema.Types.ObjectId, ref: "MenuItem" }],
+    refreshToken: { type: String }, // Added missing refreshToken field based on auth controller usage
   },
   {
     timestamps: true,
-  },
-)
+  }
+);
 
 // Virtual for backward compatibility
 userSchema.virtual("walletBalance").get(function () {
-  return this.wallet.balance
-})
+  return this.wallet.balance;
+});
 
-userSchema.virtual("favoriteRestaurants").get(function () {
-  return this.favorites
-})
+
 
 userSchema.virtual("savedAddresses").get(function () {
-  return this.addresses
-})
+  return this.addresses;
+});
 
-export const User = mongoose.model("User", userSchema)
+export const User = mongoose.model("User", userSchema);

@@ -1,340 +1,282 @@
-import { Order } from "../models/order.model.js"
-import { Restaurant } from "../models/restaurant.model.js"
-import { MenuItem } from "../models/menuItem.model.js"
-import { User } from "../models/user.model.js"
-import { sendOrderStatusNotification } from "../services/notificationService.js"
-import { Notification } from "../models/notification.model.js"
+import { Table } from "../models/table.model.js"
+import {Order} from "../models/order.model.js"
+import MenuItem from "../models/menuItem.model.js"
+import TableSession from "../models/table-session.model.js"
+import {User} from "../models/user.model.js"
 
-// @desc    Create a new order
-// @route   POST /api/orders
-// @access  Private
-export const createOrder = async (req, res) => {
+// Create a new order
+export const createOrder = async (req, res, next) => {
   try {
-    const { restaurantId, items, deliveryAddress, deliveryInstructions, paymentMethod } = req.body
+    const { userId, items, deliveryAddress, deliveryInstructions, paymentMethod, sessionId, TableId, orderType } =
+      req.body
 
-    // Validate restaurant
-    const restaurant = await Restaurant.findById(restaurantId)
-    if (!restaurant) {
-      return res.status(404).json({ message: "Restaurant not found" })
-    }
+      if (!items || !items.length || !orderType) {
+        return res.status(400).json({ message: "Items and order type are required" })
+      }
+  
+      // Validate user if userId is provided
+      if (userId) {
+        const user = await User.findById(userId)
+        if (!user) {
+          return res.status(404).json({ message: "User not found" })
+        }
+      }
 
-    // Validate items and calculate totals
+    // Calculate order details
     let subtotal = 0
     const orderItems = []
 
     for (const item of items) {
-      const menuItem = await MenuItem.findById(item.menuItemId)
+      const { menuItemId, quantity } = item
+
+      if (!menuItemId || !quantity) {
+        return res.status(400).json({ message: "Menu item ID and quantity are required for each item" })
+      }
+
+      const menuItem = await MenuItem.findById(menuItemId)
       if (!menuItem) {
-        return res.status(404).json({ message: `Menu item not found: ${item.menuItemId}` })
+        return res.status(404).json({ message: `Menu item with ID ${menuItemId} not found` })
       }
 
-      let itemTotal = menuItem.price * item.quantity
-
-      // Calculate addons price
-      const addons = []
-      if (item.addons && item.addons.length > 0) {
-        for (const addonId of item.addons) {
-          const addon = menuItem.addons.id(addonId)
-          if (!addon) {
-            return res.status(404).json({ message: `Addon not found: ${addonId}` })
-          }
-          addons.push({
-            name: addon.name,
-            price: addon.price,
-          })
-          itemTotal += addon.price * item.quantity
-        }
+      if (!menuItem.isAvailable) {
+        return res.status(400).json({ message: `Menu item ${menuItem.name} is not available` })
       }
+
+      // Calculate item total
+      const itemPrice = menuItem.price
+      const total = itemPrice * quantity
+      subtotal += total
 
       orderItems.push({
-        menuItem: menuItem._id,
+        menuItem: menuItemId,
         name: menuItem.name,
-        price: menuItem.price,
-        quantity: item.quantity,
-        total: itemTotal,
-        specialInstructions: item.specialInstructions || "",
-        addons,
+        price: itemPrice,
+        quantity,
+        total,
       })
-
-      subtotal += itemTotal
     }
 
-    // Calculate tax and delivery fee
-    const tax = subtotal * 0.1 // 10% tax
-    const deliveryFee = restaurant.deliveryFee || 0
-    const total = subtotal + tax + deliveryFee
+    // Set delivery fee based on order type
+    const deliveryFee = orderType === "Delivery" ? 2.0 : 0
+    const total = subtotal + deliveryFee
 
-    // Create order
-    const order = await Order.create({
-      user: req.user._id,
-      restaurant: restaurantId,
+    // Create the order
+    const order = new Order({
+      user: userId,
       items: orderItems,
+      TableId: TableId || null,
       subtotal,
-      tax,
       deliveryFee,
       total,
-      deliveryAddress,
-      deliveryInstructions,
-      paymentMethod,
-      paymentStatus: paymentMethod === "cash" ? "pending" : "pending",
-      status: "pending",
+      orderType,
+      paymentMethod: paymentMethod || "cash",
+      deliveryAddress: deliveryAddress || {
+        address: orderType === "Dine-in" ? "Dine-in" : "Pick up at restaurant",
+        apartment: "",
+        landmark: "",
+        latitude: 0,
+        longitude: 0,
+      },
+      deliveryInstructions: deliveryInstructions || "",
     })
 
-    // Create notification for the order
-    await Notification.create({
-      user: req.user._id,
-      title: "Order Placed",
-      body: `Your order #${order._id.toString().slice(-6)} has been placed successfully.`,
-      data: { orderId: order._id },
-      type: "order",
-      relatedId: order._id,
-    })
+    await order.save()
+
+    // If session ID is provided, add order to the session
+    if (sessionId) {
+      const session = await TableSession.findById(sessionId)
+      if (!session) {
+        return res.status(404).json({ message: "Session not found" })
+      }
+
+      session.orders.push(order._id)
+      await session.save()
+    }
 
     res.status(201).json({
       message: "Order created successfully",
-      order,
+      order: {
+        id: order._id,
+        items: order.items,
+        subtotal: order.subtotal,
+        deliveryFee: order.deliveryFee,
+        total: order.total,
+        status: order.status,
+        paymentStatus: order.paymentStatus,
+        orderType: order.orderType,
+      },
     })
   } catch (error) {
-    console.error(error)
-    res.status(500).json({ message: "Server Error" })
+    next(error)
   }
 }
 
-// @desc    Get all orders for a user
-// @route   GET /api/orders
-// @access  Private
-export const getUserOrders = async (req, res) => {
+// Get order details
+export const getOrderDetails = async (req, res, next) => {
   try {
-    const { page = 1, limit = 10, status } = req.query
+    const { orderId } = req.params
 
-    const query = { user: req.user._id }
+    const order = await Order.findById(orderId).populate("user", "name email phoneNumber").populate({
+      path: "items.menuItem",
+      select: "name image",
+    })
 
+    if (!order) {
+      return res.status(404).json({ message: "Order not found" })
+    }
+
+    res.status(200).json({ order })
+  } catch (error) {
+    next(error)
+  }
+}
+
+// Update order status
+export const updateOrderStatus = async (req, res, next) => {
+  try {
+    const { orderId } = req.params
+    const { status } = req.body
+
+    if (!status) {
+      return res.status(400).json({ message: "Status is required" })
+    }
+
+    const order = await Order.findById(orderId)
+
+    if (!order) {
+      return res.status(404).json({ message: "Order not found" })
+    }
+
+    // Update order status
+    order.status = status
+    await order.save()
+
+    res.status(200).json({
+      message: "Order status updated successfully",
+      order: {
+        id: order._id,
+        status: order.status,
+      },
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+// Update payment status
+export const updatePaymentStatus = async (req, res, next) => {
+  try {
+    const { orderId } = req.params
+    const { paymentStatus, paymentId } = req.body
+
+    if (!paymentStatus) {
+      return res.status(400).json({ message: "Payment status is required" })
+    }
+
+    const order = await Order.findById(orderId)
+
+    if (!order) {
+      return res.status(404).json({ message: "Order not found" })
+    }
+
+    // Update payment status
+    order.paymentStatus = paymentStatus
+    if (paymentId) {
+      order.paymentId = paymentId
+    }
+    await order.save()
+
+    // If this order is part of a session and all orders are paid, update session status
+    const session = await TableSession.findOne({ orders: orderId })
+    if (session && session.status === "payment_pending") {
+      const unpaidOrders = await Order.countDocuments({
+        _id: { $in: session.orders },
+        paymentStatus: { $ne: "paid" },
+      })
+
+      if (unpaidOrders === 0) {
+        session.status = "closed"
+        session.endTime = new Date()
+        await session.save()
+
+        // Update table status
+        const table = await Table.findById(session.tableId)
+        if (table) {
+          table.status = "cleaning"
+          table.currentSession = null
+          await table.save()
+        }
+      }
+    }
+
+    res.status(200).json({
+      message: "Payment status updated successfully",
+      order: {
+        id: order._id,
+        paymentStatus: order.paymentStatus,
+        paymentId: order.paymentId,
+      },
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+// Get orders by user
+export const getOrdersByUser = async (req, res, next) => {
+  try {
+    const { userId } = req.params
+    const { status } = req.query
+
+    const query = { user: userId }
     if (status) {
       query.status = status
     }
 
     const orders = await Order.find(query)
       .populate("restaurant", "name logo")
+      .select("items subtotal total status createdAt")
       .sort({ createdAt: -1 })
-      .limit(limit * 1)
-      .skip((page - 1) * limit)
 
-    const count = await Order.countDocuments(query)
-
-    res.status(200).json({
-      orders,
-      totalPages: Math.ceil(count / limit),
-      currentPage: page,
-      totalCount: count,
-    })
+    res.status(200).json({ orders })
   } catch (error) {
-    console.error(error)
-    res.status(500).json({ message: "Server Error" })
+    next(error)
   }
 }
 
-// @desc    Get order by ID
-// @route   GET /api/orders/:id
-// @access  Private
-export const getOrderById = async (req, res) => {
+// Remove getOrdersByRestaurant function since we're working with a single restaurant
+// export const getOrdersByRestaurant = async (req, res, next) => { ... }
+
+// Get orders by session
+export const getOrdersBySession = async (req, res, next) => {
   try {
-    const order = await Order.findById(req.params.id)
-      .populate("restaurant", "name logo contactPhone location")
-      .populate("items.menuItem", "name image")
+    const { sessionId } = req.params
 
-    if (!order) {
-      return res.status(404).json({ message: "Order not found" })
+    const session = await TableSession.findById(sessionId)
+    if (!session) {
+      return res.status(404).json({ message: "Session not found" })
     }
 
-    // Check if the order belongs to the user or if user is admin
-    if (order.user.toString() !== req.user._id.toString() && !req.user.isAdmin) {
-      return res.status(401).json({ message: "Not authorized" })
-    }
-
-    res.status(200).json(order)
-  } catch (error) {
-    console.error(error)
-    res.status(500).json({ message: "Server Error" })
-  }
-}
-
-// @desc    Update order status
-// @route   PUT /api/orders/:id/status
-// @access  Private (Admin or Restaurant Owner)
-export const updateOrderStatus = async (req, res) => {
-  try {
-    const { status } = req.body
-
-    if (!["pending", "confirmed", "preparing", "out_for_delivery", "delivered", "cancelled"].includes(status)) {
-      return res.status(400).json({ message: "Invalid status" })
-    }
-
-    const order = await Order.findById(req.params.id)
-
-    if (!order) {
-      return res.status(404).json({ message: "Order not found" })
-    }
-
-    // Check if user is admin or restaurant owner
-    const restaurant = await Restaurant.findById(order.restaurant)
-    if (!req.user.isAdmin && restaurant.owner.toString() !== req.user._id.toString()) {
-      return res.status(401).json({ message: "Not authorized" })
-    }
-
-    // Update order status
-    order.status = status
-
-    // If order is delivered, update delivery time
-    if (status === "delivered") {
-      order.actualDeliveryTime = new Date()
-    }
-
-    await order.save()
-
-    // Send notification to user
-    await sendOrderStatusNotification(order.user, order._id, status)
-
-    // Create notification record
-    let notificationTitle = "Order Update"
-    let notificationBody = `Your order #${order._id.toString().slice(-6)} status has been updated to ${status}.`
-
-    if (status === "delivered") {
-      notificationTitle = "Order Delivered"
-      notificationBody = `Your order #${order._id.toString().slice(-6)} has been delivered. Enjoy your meal!`
-    } else if (status === "cancelled") {
-      notificationTitle = "Order Cancelled"
-      notificationBody = `Your order #${order._id.toString().slice(-6)} has been cancelled.`
-    }
-
-    await Notification.create({
-      user: order.user,
-      title: notificationTitle,
-      body: notificationBody,
-      data: { orderId: order._id, status },
-      type: "order",
-      relatedId: order._id,
-    })
-
-    res.status(200).json({
-      message: "Order status updated successfully",
-      order,
-    })
-  } catch (error) {
-    console.error(error)
-    res.status(500).json({ message: "Server Error" })
-  }
-}
-
-// @desc    Cancel order
-// @route   PUT /api/orders/:id/cancel
-// @access  Private
-export const cancelOrder = async (req, res) => {
-  try {
-    const order = await Order.findById(req.params.id)
-
-    if (!order) {
-      return res.status(404).json({ message: "Order not found" })
-    }
-
-    // Check if the order belongs to the user
-    if (order.user.toString() !== req.user._id.toString() && !req.user.isAdmin) {
-      return res.status(401).json({ message: "Not authorized" })
-    }
-
-    // Check if order can be cancelled
-    if (!["pending", "confirmed"].includes(order.status)) {
-      return res.status(400).json({ message: "Order cannot be cancelled at this stage" })
-    }
-
-    // Update order status
-    order.status = "cancelled"
-    await order.save()
-
-    // If payment was made, initiate refund
-    if (order.paymentStatus === "paid" && order.paymentMethod !== "cash") {
-      // Refund logic would go here
-      // For wallet payment, add back to wallet
-      if (order.paymentMethod === "wallet") {
-        const user = await User.findById(req.user._id)
-        user.wallet.balance += order.total
-        user.wallet.transactions.push({
-          amount: order.total,
-          type: "credit",
-          description: `Refund for cancelled order #${order._id.toString().slice(-6)}`,
-        })
-        await user.save()
-      }
-    }
-
-    // Create notification for the cancellation
-    await Notification.create({
-      user: req.user._id,
-      title: "Order Cancelled",
-      body: `Your order #${order._id.toString().slice(-6)} has been cancelled.`,
-      data: { orderId: order._id },
-      type: "order",
-      relatedId: order._id,
-    })
-
-    res.status(200).json({
-      message: "Order cancelled successfully",
-      order,
-    })
-  } catch (error) {
-    console.error(error)
-    res.status(500).json({ message: "Server Error" })
-  }
-}
-
-// @desc    Get restaurant orders
-// @route   GET /api/orders/restaurant
-// @access  Private (Restaurant Owner)
-export const getRestaurantOrders = async (req, res) => {
-  try {
-    const { page = 1, limit = 10, status } = req.query
-
-    // Get restaurants owned by the user
-    const restaurants = await Restaurant.find({ owner: req.user._id }).select("_id")
-
-    if (restaurants.length === 0) {
-      return res.status(404).json({ message: "No restaurants found for this user" })
-    }
-
-    const restaurantIds = restaurants.map((r) => r._id)
-
-    const query = { restaurant: { $in: restaurantIds } }
-
-    if (status) {
-      query.status = status
-    }
-
-    const orders = await Order.find(query)
-      .populate("user", "fullName mobileNumber")
-      .populate("restaurant", "name")
+    const orders = await Order.find({ _id: { $in: session.orders } })
+      .populate({
+        path: "items.menuItem",
+        select: "name image isVeg",
+      })
       .sort({ createdAt: -1 })
-      .limit(limit * 1)
-      .skip((page - 1) * limit)
 
-    const count = await Order.countDocuments(query)
+    // Calculate session total
+    const sessionTotal = orders.reduce((total, order) => total + order.total, 0)
 
     res.status(200).json({
+      sessionId: session._id,
+      tableId: session.tableId,
+      status: session.status,
+      startTime: session.startTime,
+      endTime: session.endTime,
       orders,
-      totalPages: Math.ceil(count / limit),
-      currentPage: page,
-      totalCount: count,
+      sessionTotal,
     })
   } catch (error) {
-    console.error(error)
-    res.status(500).json({ message: "Server Error" })
+    next(error)
   }
-}
-
-// Export all functions
-export default {
-  createOrder,
-  getUserOrders,
-  getOrderById,
-  updateOrderStatus,
-  cancelOrder,
-  getRestaurantOrders,
 }

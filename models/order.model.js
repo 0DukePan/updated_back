@@ -1,4 +1,5 @@
-import mongoose from "mongoose"
+// order.model.js (Updated)
+import mongoose from "mongoose";
 
 const orderItemSchema = new mongoose.Schema({
   menuItem: { type: mongoose.Schema.Types.ObjectId, ref: "MenuItem", required: true },
@@ -13,33 +14,26 @@ const orderItemSchema = new mongoose.Schema({
       price: { type: Number },
     },
   ],
-})
+});
 
 const orderSchema = new mongoose.Schema(
   {
-    user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
-    restaurant: { type: mongoose.Schema.Types.ObjectId, ref: "Restaurant", required: true },
+    user: { type: mongoose.Schema.Types.ObjectId, ref: "User"},
     items: [orderItemSchema],
+    TableId: { type: mongoose.Schema.Types.ObjectId, ref: "Table" },
     subtotal: { type: Number, required: true },
-    tax: { type: Number, required: true },
     deliveryFee: { type: Number, required: true },
     total: { type: Number, required: true },
-
-    //todo 
-
-    // orderType: {
-    //   type: String,
-    //   enum: ["Take Away", "Delivery", "Dine-in"],
-    //   required: true,
-    // },
+    orderType: {
+      type: String,
+      enum: ["Take Away", "Delivery", "Dine In"],
+      required: true,
+    },
     status: {
       type: String,
       enum: ["pending", "confirmed", "preparing", "out_for_delivery", "delivered", "cancelled"],
       default: "pending",
     },
-    
-    //todo 
-    // TableId: { type: mongoose.Schema.Types.ObjectId, ref: "Table" },
     paymentStatus: { type: String, enum: ["pending", "paid", "failed"], default: "pending" },
     paymentMethod: { type: String, enum: ["card", "cash", "wallet"], default: "cash" },
     paymentId: { type: String },
@@ -57,7 +51,7 @@ const orderSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
-  },
-)
+  }
+);
 
-export const Order = mongoose.model("Order", orderSchema)
+export const Order = mongoose.model("Order", orderSchema);

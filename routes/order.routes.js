@@ -1,23 +1,23 @@
 import express from "express"
 import {
   createOrder,
-  getUserOrders,
-  getOrderById,
+  getOrderDetails,
   updateOrderStatus,
-  cancelOrder,
-  getRestaurantOrders,
+  updatePaymentStatus,
+  getOrdersByUser,
+  getOrdersBySession,
 } from "../controllers/order.controller.js"
-import { protect } from "../middlewares/auth.middleware.js"
+
 const router = express.Router()
 
-// User order routes
-router.post("/", protect, createOrder)
-router.get("/", protect, getUserOrders)
-router.get("/:id", protect, getOrderById)
-router.put("/:id/cancel", protect, cancelOrder)
+// Public routes
+router.post("/", createOrder)
+router.get("/:orderId", getOrderDetails)
+router.get("/user/:userId", getOrdersByUser)
+router.get("/session/:sessionId", getOrdersBySession)
 
-// Restaurant owner routes
-router.get("/restaurant", protect, getRestaurantOrders)
-router.put("/:id/status", protect, updateOrderStatus)
+// Admin routes
+router.put("/:orderId/status", updateOrderStatus)
+router.put("/:orderId/payment", updatePaymentStatus)
 
 export default router
